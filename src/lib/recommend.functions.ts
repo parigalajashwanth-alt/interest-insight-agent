@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { generateText, Output, NoObjectGeneratedError } from "ai";
+import { generateText } from "ai";
 import { z } from "zod";
 import { createLovableAiGatewayProvider } from "./ai-gateway.server";
 import { SAMPLE_REELS } from "./reels";
@@ -37,6 +37,9 @@ Hard rules:
 - "why" must cite concrete evidence from the reel content/transcripts, not generic statements.
 - "hypeAvoided" states in one short line what shallow or hype recommendation you deliberately rejected and why.`;
 
+const OUTPUT_CONTRACT = `Respond with a single JSON object and nothing else (no markdown fences, no commentary), with exactly these string keys:
+{"currentReel","interestDetected","why","recommendedTechReel","category","whyThisRecommendation","difficulty","confidence","hypeAvoided"}`;
+
 function describe(id: string) {
   const r = SAMPLE_REELS.find((x) => x.id === id);
   if (!r) return null;
@@ -69,22 +72,17 @@ ${history || "(no prior history — rely on the current reel only and be honest 
 
 Analyse the underlying interest and produce exactly one recommendation.`;
 
-    try {
-      const { output } = await generateText({
-        model: gateway("google/gemini-2.5-flash"),
-        system: SYSTEM_PROMPT,
-        prompt,
-        output: Output.object({ schema: ResultSchema }),
-      });
-      return output;
-    } catch (error) {
-      if (NoObjectGeneratedError.isInstance(error) && error.text) {
-        try {
-          return ResultSchema.parse(JSON.parse(error.text));
-        } catch {
-          /* fall through */
-        }
-      }
-      throw error;
+    const { text } = await generateText({
+      model: gateway("google/gemini-2.5-flash"),
+      system: `${SYSTEM_PROMPT}\n\n${OUTPUT_CONTRACT}`,
+      prompt,
+    });
+
+    const raw = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "");
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1) {
+      throw new Error("The agent returned an unreadable response. Please try again.");
     }
+    return ResultSchema.parse(JSON.parse(raw.slice(start, end + 1)));
   });
